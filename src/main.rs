@@ -1,5 +1,5 @@
 use openusd_rs::{
-    sdf, usd,
+    sdf, usd, vt,
     gf::Matrix4d,
     tf::Token
 };
@@ -57,14 +57,45 @@ fn collect_leaves_and_instancers(stage: &usd::Stage) -> (Vec<sdf::Path>, Vec<sdf
 }
 
 
+// --- compose local xform using xformOpOrder ---
 fn get_local_transform(prim: &usd::Prim) -> Option<Matrix4d> {
-    let tok = Token::new("xformOp:transform");
-    if prim.has_attribute(&tok) {
-        let attr = prim.attribute(&tok);
-        Some(attr.get::<Matrix4d>())
-    } else {
-        None
+    // 1) Try xformOpOrder first
+    let order_tok = Token::new("xformOpOrder");
+    if prim.has_attribute(&order_tok) {
+        let attr = prim.attribute(&order_tok);
+
+        // NOTE: token[] comes back as vt::Array<Token> in openusd-rs
+        let order: vt::Array<Token> = attr.get::<vt::Array<Token>>();
+
+        let mut local = Matrix4d::identity();
+        for op_name in order.iter() {
+            // Each entry is something like "xformOp:transform:stagemanager1"
+            if prim.has_attribute(op_name) {
+                let op_attr = prim.attribute(op_name);
+
+                // In your ASCII the ops are declared as "matrix4d xformOp:transform:...".
+                // So read them as Matrix4d and multiply in listed order.
+                let m = op_attr.get::<Matrix4d>();
+                local *= m; // apply in-order
+            } else {
+                // Unknown/missing op entry; skip
+                // (Optional: log/warn here)
+            }
+        }
+        // If order existed but had no valid ops, keep identity but return Some for clarity
+        return Some(local);
     }
+
+    // 2) Fallback: single consolidated transform
+    let single_tok = Token::new("xformOp:transform");
+    if prim.has_attribute(&single_tok) {
+        let attr = prim.attribute(&single_tok);
+        let m = attr.get::<Matrix4d>();
+        return Some(m);
+    }
+
+    // No local xform
+    None
 }
 
 
@@ -73,18 +104,24 @@ fn accumulate_transforms(stage: &usd::Stage, start: &usd::Prim) -> Matrix4d {
     let mut current: usd::Prim = stage.prim_at_path(start.path().clone());
 
     loop {
+        //define parent
+        let parent_path = current.path().parent_path();
+        println!("parent_path= \n{}", parent_path);
+
+        //aply and print local transform
         if let Some(local_xf) = get_local_transform(&current) {
             // child-first accumulation (total = total * local)
             total *= local_xf;
+            println!("local_xf= \n{:?}", local_xf);
         }
-        let parent_path = current.path().parent_path();
+        
+        //stop if root reloop if not 
         if parent_path.is_empty() { break; }
         current = stage.prim_at_path(parent_path);
     }
 
     total
 }
-
 
 fn main() {
     let path = "C:/Users/Nicol/dev/rust/usd/descent/Helmet_bus_2.usdc";
