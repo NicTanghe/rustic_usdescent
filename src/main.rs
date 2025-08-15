@@ -1,8 +1,4 @@
-use openusd_rs::{
-    sdf, usd, vt,
-    gf::Matrix4d,
-    tf::Token
-};
+use openusd_rs::{gf::Matrix4d, sdf, tf::Token, usd, vt};
 use std::collections::HashSet;
 
 fn is_in_prototypes_subtree(path: &sdf::Path) -> bool {
@@ -56,7 +52,6 @@ fn collect_leaves_and_instancers(stage: &usd::Stage) -> (Vec<sdf::Path>, Vec<sdf
     (leaves, instancers)
 }
 
-
 // --- compose local xform using xformOpOrder ---
 fn get_local_transform(prim: &usd::Prim) -> Option<Matrix4d> {
     // 1) Try xformOpOrder first
@@ -98,7 +93,6 @@ fn get_local_transform(prim: &usd::Prim) -> Option<Matrix4d> {
     None
 }
 
-
 fn accumulate_transforms(stage: &usd::Stage, start: &usd::Prim) -> Matrix4d {
     let mut total = Matrix4d::identity();
     let mut current: usd::Prim = stage.prim_at_path(start.path().clone());
@@ -114,9 +108,11 @@ fn accumulate_transforms(stage: &usd::Stage, start: &usd::Prim) -> Matrix4d {
             total *= local_xf;
             println!("local_xf= \n{:?}", local_xf);
         }
-        
-        //stop if root reloop if not 
-        if parent_path.is_empty() { break; }
+
+        //stop if root reloop if not
+        if parent_path.is_empty() {
+            break;
+        }
         current = stage.prim_at_path(parent_path);
     }
 
@@ -129,7 +125,10 @@ fn main() {
 
     let (leaves, instancers) = collect_leaves_and_instancers(&stage);
 
-    println!("Leaf prims (excluding /Prototypes and instancers): {}", leaves.len());
+    println!(
+        "Leaf prims (excluding /Prototypes and instancers): {}",
+        leaves.len()
+    );
     for p in &leaves {
         let prim = stage.prim_at_path(p.clone());
         let xf = accumulate_transforms(&stage, &prim);
