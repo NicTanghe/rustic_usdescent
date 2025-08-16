@@ -1,4 +1,9 @@
-use openusd_rs::{gf::Matrix4d, sdf, tf::Token, usd, vt};
+use openusd_rs::{
+    gf::{self, Matrix4d},
+    sdf,
+    tf::Token,
+    usd, usd_geom, vt,
+};
 use std::collections::HashSet;
 
 fn is_in_prototypes_subtree(path: &sdf::Path) -> bool {
@@ -68,13 +73,10 @@ fn get_local_transform(prim: &usd::Prim) -> Option<Matrix4d> {
             if prim.has_attribute(op_name) {
                 let op_attr = prim.attribute(op_name);
 
-                // In your ASCII the ops are declared as "matrix4d xformOp:transform:...".
-                // So read them as Matrix4d and multiply in listed order.
+                // In USDA the ops are declared as "matrix4d xformOp:transform:...".
+                // read them as Matrix4d and multiply in listed order.
                 let m = op_attr.get::<Matrix4d>();
                 local *= m; // apply in-order
-            } else {
-                // Unknown/missing op entry; skip
-                // (Optional: log/warn here)
             }
         }
         // If order existed but had no valid ops, keep identity but return Some for clarity
@@ -100,13 +102,11 @@ fn accumulate_transforms(stage: &usd::Stage, start: &usd::Prim) -> Matrix4d {
     loop {
         //define parent
         let parent_path = current.path().parent_path();
-        println!("parent_path= \n{}", parent_path);
 
         //aply and print local transform
         if let Some(local_xf) = get_local_transform(&current) {
             // child-first accumulation (total = total * local)
             total *= local_xf;
-            println!("local_xf= \n{:?}", local_xf);
         }
 
         //stop if root reloop if not
@@ -119,27 +119,82 @@ fn accumulate_transforms(stage: &usd::Stage, start: &usd::Prim) -> Matrix4d {
     total
 }
 
+struct MeshData {
+    positions: Vec<[f32; 3]>,
+    face_vertex_counts: Vec<usize>,
+    face_vertex_indices: Vec<usize>,
+    normals: Option<Vec<[f32; 3]>>,
+    uvs: Option<Vec<[f32; 2]>>,
+}
+
+fn get_mesh_data(prim: &usd::Prim) -> MeshData {
+    let mesh = usd_geom::Mesh::define(&prim.stage(), prim.path().clone());
+
+    // Positions
+    let points_array: vt::Array<gf::Vec3f> = mesh.points_attr().get();
+    let positions: Vec<[f32; 3]> = points_array.iter().map(|p| [p.x, p.y, p.z]).collect();
+
+    // Face vertex counts
+    let counts_array: vt::Array<i32> = mesh.face_vertex_counts_attr().get();
+    let face_vertex_counts: Vec<usize> = counts_array.iter().map(|&c| c as usize).collect();
+
+    // Face vertex indices
+    let indices_array: vt::Array<i32> = mesh.face_vertex_indices_attr().get();
+    let face_vertex_indices: Vec<usize> = indices_array.iter().map(|&i| i as usize).collect();
+
+    // Normals
+    let normals_array: vt::Array<gf::Vec3f> = mesh.normals_attr().get();
+    let normals = if normals_array.len() > 0 {
+        Some(normals_array.iter().map(|n| [n.x, n.y, n.z]).collect())
+    } else {
+        None
+    };
+
+    // UVs not handled yet
+    let uvs = None;
+
+    MeshData {
+        positions,
+        face_vertex_counts,
+        face_vertex_indices,
+        normals,
+        uvs,
+    }
+}
+
 fn main() {
-    let path = "C:/Users/Nicol/dev/rust/usd/descent/Helmet_bus_2.usdc";
+    let path = "C:/Users/Nicol/dev/rust/usd/qube.usdc";
     let stage = usd::Stage::open(path);
 
     let (leaves, instancers) = collect_leaves_and_instancers(&stage);
 
-    println!(
-        "Leaf prims (excluding /Prototypes and instancers): {}",
-        leaves.len()
-    );
     for p in &leaves {
         let prim = stage.prim_at_path(p.clone());
-        let xf = accumulate_transforms(&stage, &prim);
-        println!("accumulated_transforms= \n{p} => {:?}", xf);
+        if prim.type_name().as_str() == "Mesh" {
+            let mesh = get_mesh_data(&prim);
+            println!(
+                "Mesh at {}: {} vertices, 
+                \n{} indices |
+                \n points {:?} |
+                \n normals {:?} |
+                \n uvs {:?}",
+                p,
+                mesh.positions.len(),
+                mesh.face_vertex_indices.len(),
+                mesh.positions,
+                mesh.normals,
+                mesh.uvs
+
+            );
+        }
     }
 
-    println!();
-    println!("PointInstancers: {}", instancers.len());
-    for p in &instancers {
-        let prim = stage.prim_at_path(p.clone());
-        let xf = accumulate_transforms(&stage, &prim);
-        println!("accumulated_transforms= \n{p} => {:?}", xf);
+    if !instancers.is_empty() {
+        println!("\nPointInstancers: {}", instancers.len());
+        for p in &instancers {
+            let prim = stage.prim_at_path(p.clone());
+            let xf = accumulate_transforms(&stage, &prim);
+            println!("{p}");
+        }
     }
 }
